@@ -28,7 +28,7 @@ def save_trace(trace: dict, output_path: str) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Fetch and display a traced SDN path from the Ryu controller.")
+    parser = argparse.ArgumentParser(description="Fetch and display a traced SDN path from the OS-Ken controller.")
     parser.add_argument("--src", required=True, help="Source host name, IP, or MAC")
     parser.add_argument("--dst", required=True, help="Destination host name, IP, or MAC")
     parser.add_argument("--controller-url", default="http://127.0.0.1:8080")

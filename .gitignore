@@ -1,2 +1,6 @@
 CODE_EXPLANATION.md
 HOW_TO_USE.md
+__pycache__/
+*.py[cod]
+.venv/
+.venv311/

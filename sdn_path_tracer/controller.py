@@ -1,22 +1,31 @@
 from __future__ import annotations
 
 import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
-from ryu.app.wsgi import ControllerBase, Response, WSGIApplication, route
-from ryu.base import app_manager
-from ryu.controller import ofp_event
-from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, set_ev_cls
-from ryu.lib.packet import arp, ethernet, ether_types, ipv4, packet
-from ryu.ofproto import ofproto_v1_3
-from ryu.topology import event
-from ryu.topology.api import get_link, get_switch
+from os_ken import cfg
+from os_ken.base import app_manager
+from os_ken.controller import ofp_event
+from os_ken.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, set_ev_cls
+from os_ken.lib.packet import arp, ethernet, ether_types, ipv4, packet
+from os_ken.ofproto import ofproto_v1_3
+from os_ken.topology import event
+from os_ken.topology.api import get_link, get_switch
 
 try:
     from sdn_path_tracer.core import PathTracerState, TraceError, format_trace
 except ModuleNotFoundError:
     from core import PathTracerState, TraceError, format_trace
 
-TRACE_APP_INSTANCE = "trace_app_instance"
+CONF = cfg.CONF
+CONF.register_opts(
+    [
+        cfg.StrOpt("trace_api_host", default="127.0.0.1"),
+        cfg.IntOpt("trace_api_port", default=8080),
+    ]
+)
 
 DEMO_HOSTS = {
     "h1": {"ip": "10.0.0.1", "mac": "00:00:00:00:00:01"},
@@ -26,40 +35,74 @@ DEMO_HOSTS = {
 }
 
 
-class PathTraceController(ControllerBase):
-    def __init__(self, req, link, data, **config):
-        super().__init__(req, link, data, **config)
-        self.app = data[TRACE_APP_INSTANCE]
+class TraceRequestHandler(BaseHTTPRequestHandler):
+    app = None
 
-    @route("trace", "/trace", methods=["GET"])
-    def trace(self, req, **kwargs):
-        src = req.params.get("src")
-        dst = req.params.get("dst")
-        pretty = req.params.get("pretty", "0") == "1"
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        if parsed.path != "/trace":
+            self._write_json(404, {"error": "Unknown endpoint."})
+            return
+        query = parse_qs(parsed.query)
+        src = query.get("src", [None])[0]
+        dst = query.get("dst", [None])[0]
+        pretty = query.get("pretty", ["0"])[0] == "1"
         if not src or not dst:
-            return Response(
-                status=400,
-                content_type="application/json",
-                body=json.dumps({"error": "Both src and dst query parameters are required."}),
-            )
+            self._write_json(400, {"error": "Both src and dst query parameters are required."})
+            return
         try:
             trace = self.app.state.build_trace(src, dst)
             payload = trace if not pretty else {"trace": trace, "text": format_trace(trace)}
-            return Response(content_type="application/json", body=json.dumps(payload, indent=2))
+            self._write_json(200, payload)
         except TraceError as exc:
-            return Response(status=404, content_type="application/json", body=json.dumps({"error": str(exc)}))
+            self._write_json(404, {"error": str(exc)})
+
+    def log_message(self, format, *args):
+        if self.app:
+            self.app.logger.info("trace-api " + format, *args)
+
+    def _write_json(self, status_code: int, payload: dict) -> None:
+        body = json.dumps(payload, indent=2).encode("utf-8")
+        self.send_response(status_code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
 
-class PathTracerController(app_manager.RyuApp):
+class PathTracerController(app_manager.OSKenApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
-    _CONTEXTS = {"wsgi": WSGIApplication}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.state = PathTracerState(DEMO_HOSTS)
         self.datapaths = {}
-        wsgi = kwargs["wsgi"]
-        wsgi.register(PathTraceController, {TRACE_APP_INSTANCE: self})
+        self.http_server = None
+        self.http_thread = None
+
+    def start(self):
+        super().start()
+        self._start_trace_api()
+
+    def stop(self):
+        if self.http_server is not None:
+            self.http_server.shutdown()
+            self.http_server.server_close()
+            self.http_server = None
+        if self.http_thread is not None:
+            self.http_thread.join(timeout=1)
+            self.http_thread = None
+        super().stop()
+
+    def _start_trace_api(self) -> None:
+        if self.http_server is not None:
+            return
+        handler = type("BoundTraceRequestHandler", (TraceRequestHandler,), {})
+        handler.app = self
+        self.http_server = ThreadingHTTPServer((CONF.trace_api_host, CONF.trace_api_port), handler)
+        self.http_thread = threading.Thread(target=self.http_server.serve_forever, daemon=True)
+        self.http_thread.start()
+        self.logger.info("Trace API listening on http://%s:%s", CONF.trace_api_host, CONF.trace_api_port)
 
     def _refresh_topology(self) -> None:
         switch_list = get_switch(self, None)

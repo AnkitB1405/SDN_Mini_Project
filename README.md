@@ -1,10 +1,10 @@
 # SDN Based Path Tracer
 
-This mini project builds an SDN path tracer on top of `Ryu` and `Mininet`. It identifies the forwarding path taken by packets, tracks the flow rules installed on switches, displays the route in the terminal, and validates the logic with tests.
+This mini project builds an SDN path tracer on top of `OS-Ken` and `Mininet`. It identifies the forwarding path taken by packets, tracks the flow rules installed on switches, displays the route in the terminal, and validates the logic with tests.
 
 ## What the project does
 
-In Software Defined Networking, the controller decides how switches forward packets. In this project, the Ryu controller learns the network topology, watches packets that arrive at the controller, discovers where hosts are attached, installs OpenFlow rules, and stores those rules so the route can be traced later.
+In Software Defined Networking, the controller decides how switches forward packets. In this project, the OS-Ken controller learns the network topology, watches packets that arrive at the controller, discovers where hosts are attached, installs OpenFlow rules, and stores those rules so the route can be traced later.
 
 When traffic is generated between two hosts:
 
@@ -22,7 +22,8 @@ h1 -> s1 -> s2 -> s4 -> h4
 
 ## Project files
 
-- `sdn_path_tracer/controller.py` - Ryu controller app
+- `sdn_path_tracer/controller.py` - OS-Ken controller app
+- `sdn_path_tracer/run_controller.py` - launcher for the OS-Ken controller
 - `sdn_path_tracer/demo_topology.py` - Mininet demo topology
 - `sdn_path_tracer/trace_cli.py` - terminal trace client
 - `sdn_path_tracer/core.py` - path and flow tracking logic
@@ -48,11 +49,11 @@ Hosts use fixed IP and MAC addresses so the controller can label traces cleanly.
 
 ## Prerequisites
 
-- Ubuntu
+- Kali Linux Rolling or Ubuntu
 - Python 3
 - Mininet installed
 - Open vSwitch installed
-- `ryu` installed in your Python environment
+- `os-ken` installed in your Python environment
 
 Install the Python dependency:
 
@@ -70,13 +71,13 @@ sudo mn -c
 
 Open three terminals in the project folder.
 
-### 1. Start the Ryu controller
+### 1. Start the OS-Ken controller
 
 ```bash
-ryu-manager --observe-links --ofp-tcp-listen-port 6653 sdn_path_tracer/controller.py
+python3 -m sdn_path_tracer.run_controller --observe-links --ofp-tcp-listen-port 6653 --trace-api-port 8080
 ```
 
-The controller exposes the trace API on port `8080`.
+The launcher starts OS-Ken, loads the project controller, and exposes the trace API on port `8080`.
 
 ### 2. Start the Mininet topology
 
@@ -136,7 +137,7 @@ The trace API and CLI return these fields:
 
 ## How the path is identified
 
-The controller discovers switch links from Mininet using Ryu topology events. When a packet reaches the controller, it learns which host is attached to which switch port. Once both end hosts are known, it calculates the shortest switch path and installs OpenFlow 1.3 rules along that route. Those installed rules are stored in memory and later used to reconstruct the exact forwarding path.
+The controller discovers switch links from Mininet using OS-Ken topology events. When a packet reaches the controller, it learns which host is attached to which switch port. Once both end hosts are known, it calculates the shortest switch path and installs OpenFlow 1.3 rules along that route. Those installed rules are stored in memory and later used to reconstruct the exact forwarding path.
 
 ## Running the tests
 
@@ -159,3 +160,5 @@ The test suite checks:
 - If the trace call says the destination host is not discovered yet, generate traffic first.
 - If ports are already in use, stop old controller or Mininet processes and run `sudo mn -c`.
 - The controller uses the shortest available path based on discovered links.
+- `os-ken==4.1.1` is pinned because it is the latest stable PyPI release and it lists Python 3.13 support.
+- The current `os-ken` PyPI package on this machine does not expose `osken-manager`, so the supported startup command is `python3 -m sdn_path_tracer.run_controller`.
