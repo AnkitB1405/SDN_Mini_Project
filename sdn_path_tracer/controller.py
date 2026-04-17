@@ -9,6 +9,7 @@ from os_ken import cfg
 from os_ken.base import app_manager
 from os_ken.controller import ofp_event
 from os_ken.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER, set_ev_cls
+from os_ken.lib import mac as mac_lib
 from os_ken.lib.packet import arp, ethernet, ether_types, ipv4, packet
 from os_ken.ofproto import ofproto_v1_3
 from os_ken.topology import event
@@ -28,11 +29,19 @@ CONF.register_opts(
 )
 
 DEMO_HOSTS = {
-    "h1": {"ip": "10.0.0.1", "mac": "00:00:00:00:00:01"},
-    "h2": {"ip": "10.0.0.2", "mac": "00:00:00:00:00:02"},
-    "h3": {"ip": "10.0.0.3", "mac": "00:00:00:00:00:03"},
-    "h4": {"ip": "10.0.0.4", "mac": "00:00:00:00:00:04"},
+    "h1": {"ip": "10.0.0.1", "mac": "00:00:00:00:00:01", "switch": 1, "port": 1},
+    "h2": {"ip": "10.0.0.2", "mac": "00:00:00:00:00:02", "switch": 2, "port": 1},
+    "h3": {"ip": "10.0.0.3", "mac": "00:00:00:00:00:03", "switch": 3, "port": 1},
+    "h4": {"ip": "10.0.0.4", "mac": "00:00:00:00:00:04", "switch": 4, "port": 1},
 }
+
+DEMO_LINKS = [
+    (1, 2, 2, 2),
+    (1, 3, 3, 2),
+    (2, 3, 4, 2),
+    (3, 3, 4, 3),
+    (2, 4, 3, 4),
+]
 
 
 class TraceRequestHandler(BaseHTTPRequestHandler):
@@ -79,6 +88,7 @@ class PathTracerController(app_manager.OSKenApp):
         self.datapaths = {}
         self.http_server = None
         self.http_thread = None
+        self._seed_demo_topology()
 
     def start(self):
         super().start()
@@ -103,6 +113,10 @@ class PathTracerController(app_manager.OSKenApp):
         self.http_thread = threading.Thread(target=self.http_server.serve_forever, daemon=True)
         self.http_thread.start()
         self.logger.info("Trace API listening on http://%s:%s", CONF.trace_api_host, CONF.trace_api_port)
+
+    def _seed_demo_topology(self) -> None:
+        for src_dpid, src_port, dst_dpid, dst_port in DEMO_LINKS:
+            self.state.add_link(src_dpid, src_port, dst_dpid, dst_port)
 
     def _refresh_topology(self) -> None:
         switch_list = get_switch(self, None)
@@ -169,6 +183,14 @@ class PathTracerController(app_manager.OSKenApp):
             if host:
                 return host
         return self.state.get_host(dst_mac)
+
+    @staticmethod
+    def _should_flood_packet(eth) -> bool:
+        return eth.dst == mac_lib.BROADCAST_STR
+
+    @staticmethod
+    def _is_arp_packet(pkt: packet.Packet) -> bool:
+        return pkt.get_protocol(arp.arp) is not None
 
     def _build_match(self, parser, in_port: int, src_host, dst_host):
         match_fields = {
@@ -244,6 +266,11 @@ class PathTracerController(app_manager.OSKenApp):
 
         src_ip, dst_ip = self._extract_ips(pkt)
         src_host = self._learn_source_host(datapath.id, in_port, eth.src, src_ip)
+
+        if self._is_arp_packet(pkt) or self._should_flood_packet(eth):
+            self._flood(datapath, msg, in_port)
+            return
+
         dst_host = self._resolve_destination_host(eth.dst, dst_ip)
 
         if not src_host or not dst_host:

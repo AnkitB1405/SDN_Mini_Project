@@ -120,11 +120,31 @@ class PathTracerState:
         if ip:
             host.ip = ip
             self.name_by_ip[ip] = resolved_name
-        if switch_dpid is not None:
-            host.switch_dpid = switch_dpid
-        if port_no is not None:
-            host.port_no = port_no
+        current_location = (host.switch_dpid, host.port_no)
+        new_location = (switch_dpid, port_no)
+        if self._should_update_location(current_location, new_location):
+            if switch_dpid is not None:
+                host.switch_dpid = switch_dpid
+            if port_no is not None:
+                host.port_no = port_no
         return host
+
+    @staticmethod
+    def _should_update_location(
+        current_location: tuple[Optional[int], Optional[int]],
+        new_location: tuple[Optional[int], Optional[int]],
+    ) -> bool:
+        current_switch, current_port = current_location
+        new_switch, new_port = new_location
+        if new_switch is None and new_port is None:
+            return False
+        if current_switch is None or current_port is None:
+            return True
+        if new_switch == current_switch and (new_port is None or new_port == current_port):
+            return True
+        if new_switch == current_switch and new_port is not None:
+            return True
+        return False
 
     def shortest_path(self, src_dpid: int, dst_dpid: int) -> list[int]:
         if src_dpid == dst_dpid:

@@ -58,6 +58,22 @@ class PathTracerStateTests(unittest.TestCase):
             self.state.build_trace("h1", "h4")
         self.assertIn("Generate traffic first", str(ctx.exception))
 
+    def test_host_location_is_not_overwritten_by_transit_packet(self):
+        state = PathTracerState({"h1": {"ip": "10.0.0.1", "mac": "00:00:00:00:00:01"}})
+        state.learn_host("h1", switch_dpid=1, port_no=1)
+        state.learn_host(mac="00:00:00:00:00:01", switch_dpid=2, port_no=2)
+        host = state.get_host("h1")
+        self.assertEqual(host.switch_dpid, 1)
+        self.assertEqual(host.port_no, 1)
+
+    def test_known_hosts_can_start_with_fixed_attachment(self):
+        state = PathTracerState(
+            {"h4": {"ip": "10.0.0.4", "mac": "00:00:00:00:00:04", "switch": 4, "port": 1}}
+        )
+        host = state.get_host("h4")
+        self.assertEqual(host.switch_dpid, 4)
+        self.assertEqual(host.port_no, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
