@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 try:
     from sdn_path_tracer.controller import DEMO_LINKS, PathTracerController
@@ -73,6 +74,14 @@ class ControllerLogicTests(unittest.TestCase):
         self.assertEqual(controller.state.get_host("h1").port_no, 1)
         self.assertEqual(controller.state.get_host("h4").switch_dpid, 4)
         self.assertEqual(controller.state.get_host("h4").port_no, 1)
+
+    @patch("sdn_path_tracer.controller.get_link", return_value=[])
+    @patch("sdn_path_tracer.controller.get_switch")
+    def test_refresh_topology_falls_back_to_demo_links(self, mock_get_switch, mock_get_link):
+        controller = PathTracerController()
+        mock_get_switch.return_value = [type("Switch", (), {"dp": type("DP", (), {"id": dpid})()})() for dpid in (1, 2, 3, 4)]
+        controller._refresh_topology()
+        self.assertEqual(controller._get_path_out_port(1, controller.state.get_host("h1"), controller.state.get_host("h4")), 2)
 
 
 if __name__ == "__main__":

@@ -132,6 +132,8 @@ class PathTracerController(app_manager.OSKenApp):
                 link.dst.dpid,
                 link.dst.port_no,
             )
+        if not link_list and switch_list:
+            self._seed_demo_topology()
 
     def _add_flow(self, datapath, priority, match, actions) -> None:
         ofproto = datapath.ofproto
