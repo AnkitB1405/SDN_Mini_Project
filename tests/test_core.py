@@ -66,10 +66,14 @@ class PathTracerStateTests(unittest.TestCase):
         self.assertEqual(host.switch_dpid, 1)
         self.assertEqual(host.port_no, 1)
 
-    def test_known_hosts_can_start_with_fixed_attachment(self):
-        state = PathTracerState(
-            {"h4": {"ip": "10.0.0.4", "mac": "00:00:00:00:00:04", "switch": 4, "port": 1}}
-        )
+    def test_known_hosts_can_start_without_attachment(self):
+        state = PathTracerState({"h4": {"ip": "10.0.0.4", "mac": "00:00:00:00:00:04"}})
+        host = state.get_host("h4")
+        self.assertIsNone(host.switch_dpid)
+        self.assertIsNone(host.port_no)
+
+    def test_known_hosts_can_start_with_attachment(self):
+        state = PathTracerState({"h4": {"ip": "10.0.0.4", "mac": "00:00:00:00:00:04", "switch": 4, "port": 1}})
         host = state.get_host("h4")
         self.assertEqual(host.switch_dpid, 4)
         self.assertEqual(host.port_no, 1)

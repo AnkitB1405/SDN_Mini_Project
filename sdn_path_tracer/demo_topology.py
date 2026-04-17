@@ -33,6 +33,16 @@ class DemoPathTracerTopo(Topo):
         self.addLink(s2, s3)
 
 
+def configure_demo_hosts(net: Mininet) -> None:
+    for host in net.hosts:
+        intf = host.defaultIntf()
+        host.cmd(f"ethtool -K {intf} rx off tx off sg off tso off ufo off gso off gro off lro off >/dev/null 2>&1")
+        host.cmd("sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1")
+        host.cmd("sysctl -w net.ipv6.conf.default.disable_ipv6=1 >/dev/null 2>&1")
+        host.cmd("sysctl -w net.ipv6.conf.lo.disable_ipv6=1 >/dev/null 2>&1")
+        host.cmd(f"sysctl -w net.ipv6.conf.{intf}.disable_ipv6=1 >/dev/null 2>&1")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the Mininet demo topology for the SDN path tracer.")
     parser.add_argument("--controller-ip", default="127.0.0.1")
@@ -49,6 +59,7 @@ def main() -> None:
     )
     net.build()
     net.start()
+    configure_demo_hosts(net)
     print("Topology started. Try: h1 ping -c 2 h4")
     CLI(net)
     net.stop()

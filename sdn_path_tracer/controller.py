@@ -192,6 +192,32 @@ class PathTracerController(app_manager.OSKenApp):
     def _is_arp_packet(pkt: packet.Packet) -> bool:
         return pkt.get_protocol(arp.arp) is not None
 
+    def _get_path_out_port(self, current_dpid: int, src_host, dst_host) -> int:
+        switch_path = self.state.shortest_path(src_host.switch_dpid, dst_host.switch_dpid)
+        if current_dpid not in switch_path:
+            raise TraceError(f"Switch s{current_dpid} is not on the path from {src_host.name} to {dst_host.name}.")
+        current_index = switch_path.index(current_dpid)
+        if current_index == len(switch_path) - 1:
+            return dst_host.port_no
+        next_dpid = switch_path[current_index + 1]
+        return self.state.get_link_port(current_dpid, next_dpid)
+
+    def _forward_known_arp(self, datapath, msg, src_host, dst_host) -> bool:
+        if not src_host or not dst_host:
+            return False
+        if src_host.switch_dpid is None or src_host.port_no is None:
+            return False
+        if dst_host.switch_dpid is None or dst_host.port_no is None:
+            return False
+        try:
+            out_port = self._get_path_out_port(datapath.id, src_host, dst_host)
+        except TraceError:
+            return False
+        parser = datapath.ofproto_parser
+        actions = [parser.OFPActionOutput(out_port)]
+        self._packet_out(datapath, msg, msg.match["in_port"], actions)
+        return True
+
     def _build_match(self, parser, in_port: int, src_host, dst_host):
         match_fields = {
             "in_port": in_port,
@@ -200,7 +226,7 @@ class PathTracerController(app_manager.OSKenApp):
         }
         return parser.OFPMatch(**match_fields), match_fields
 
-    def _install_direction(self, src_host, dst_host) -> int:
+    def _install_direction(self, src_host, dst_host) -> None:
         datapath = self.datapaths.get(src_host.switch_dpid)
         if datapath is None:
             raise TraceError(f"Switch s{src_host.switch_dpid} is not connected to the controller.")
@@ -227,12 +253,13 @@ class PathTracerController(app_manager.OSKenApp):
             self._add_flow(current_dp, 10, match, actions)
             self.state.record_flow_rule(src_host.name, dst_host.name, dpid, in_port, out_port, match_fields)
 
-        return self.state.get_flow_rules_for_pair(src_host.name, dst_host.name)[switch_path[0]].out_port
-
-    def _install_bidirectional_path(self, src_host, dst_host) -> int:
-        first_out_port = self._install_direction(src_host, dst_host)
+    def _install_bidirectional_path(self, src_host, dst_host) -> None:
+        self._install_direction(src_host, dst_host)
         self._install_direction(dst_host, src_host)
-        return first_out_port
+
+    def _prepare_unicast_forwarding(self, current_dpid: int, src_host, dst_host) -> int:
+        self._install_bidirectional_path(src_host, dst_host)
+        return self._get_path_out_port(current_dpid, src_host, dst_host)
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -240,6 +267,8 @@ class PathTracerController(app_manager.OSKenApp):
         self.datapaths[datapath.id] = datapath
         parser = datapath.ofproto_parser
         ofproto = datapath.ofproto
+        ipv6_drop = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IPV6)
+        self._add_flow(datapath, 5, ipv6_drop, [])
         match = parser.OFPMatch()
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)]
         self._add_flow(datapath, 0, match, actions)
@@ -267,11 +296,16 @@ class PathTracerController(app_manager.OSKenApp):
         src_ip, dst_ip = self._extract_ips(pkt)
         src_host = self._learn_source_host(datapath.id, in_port, eth.src, src_ip)
 
-        if self._is_arp_packet(pkt) or self._should_flood_packet(eth):
-            self._flood(datapath, msg, in_port)
+        dst_host = self._resolve_destination_host(eth.dst, dst_ip)
+
+        if self._is_arp_packet(pkt):
+            if not self._forward_known_arp(datapath, msg, src_host, dst_host):
+                self._flood(datapath, msg, in_port)
             return
 
-        dst_host = self._resolve_destination_host(eth.dst, dst_ip)
+        if self._should_flood_packet(eth):
+            self._flood(datapath, msg, in_port)
+            return
 
         if not src_host or not dst_host:
             self._flood(datapath, msg, in_port)
@@ -282,7 +316,7 @@ class PathTracerController(app_manager.OSKenApp):
             return
 
         try:
-            out_port = self._install_bidirectional_path(src_host, dst_host)
+            out_port = self._prepare_unicast_forwarding(datapath.id, src_host, dst_host)
         except TraceError as exc:
             self.logger.warning(str(exc))
             self._flood(datapath, msg, in_port)
